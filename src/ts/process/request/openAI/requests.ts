@@ -1024,10 +1024,21 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
         (items[items.length-1] as ResponseOutputItem).status = 'incomplete'
     }
 
-    // ---- URL 한 번에 결정 (재할당 없음) ----
-    const autofillResponsesURL = (input:string):string => {
+    // ---- URL 결정: 원본 로직 그대로 (재할당 없는 형태로만 정리) ----
+    let requestURL = arg.customURL ?? "https://api.openai.com/v1/responses"
+    if(arg.modelInfo?.endpoint){
+        requestURL = arg.modelInfo.endpoint
+    }
+
+    let risuIdentify = false
+    if(requestURL.startsWith("risu::")){
+        risuIdentify = true
+        requestURL = requestURL.replace("risu::", '')
+    }
+
+    if(aiModel === 'reverse_proxy' && db.autofillRequestUrl){
         try{
-            const url = new URL(input)
+            const url = new URL(requestURL)
             const pathSegments = url.pathname.split('/').filter(Boolean)
             const lastSegment = pathSegments[pathSegments.length - 1] ?? ''
 
@@ -1044,10 +1055,10 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
                 url.pathname = url.pathname.replace(/\/?$/, '/v1/responses')
             }
 
-            return url.toString()
+            requestURL = url.toString()
         }
         catch{
-            const [baseURL, query] = input.split('?', 2)
+            const [baseURL, query] = requestURL.split('?', 2)
             let nextURL = baseURL
             const pathSegments = nextURL.split('/').filter(Boolean)
             const lastSegment = pathSegments[pathSegments.length - 1] ?? ''
@@ -1066,43 +1077,47 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
                 nextURL += nextURL.endsWith('/') ? 'v1/responses' : '/v1/responses'
             }
 
-            return query ? `${nextURL}?${query}` : nextURL
+            requestURL = query ? `${nextURL}?${query}` : nextURL
         }
     }
 
-    const rawURL = arg.modelInfo?.endpoint ?? arg.customURL ?? "https://api.openai.com/v1/responses"
-    const risuIdentify = rawURL.startsWith("risu::")
-    const cleanedURL = risuIdentify ? rawURL.replace("risu::", '') : rawURL
-    const requestURL = (aiModel === 'reverse_proxy' && db.autofillRequestUrl)
-        ? autofillResponsesURL(cleanedURL)
-        : cleanedURL
-
-    // ---- headers 한 번에 (재할당 없음) ----
-    const headers: Record<string, string> = {
+    const headers = {
         "Authorization": "Bearer " + (arg.key ?? db.openAIKey),
-        "Content-Type": "application/json",
-        ...(risuIdentify ? { "X-Proxy-Risu": "RisuAI" } : {})
+        "Content-Type": "application/json"
     }
 
-    // ---- body 한 번에 (재할당 없음) ----
-    // getAdditionalParameters 는 reverse_proxy / xcustom::: 가 아니면 [] 를 돌려주므로
-    // 분기 없이 항상 호출해도 안전함. (이전에 {} 를 넘겨서 body 가 사라지던 버그를 수정)
+    if(risuIdentify){
+        headers["X-Proxy-Risu"] = 'RisuAI'
+    }
+
+    // ---- body: 원본 빌드 로직 그대로 두고, applyAdditionalParameters 만 마지막에 합성 ----
+    // applyParameters → (조건부) tools/store 정리 → applyAdditionalParameters 를
+    // const 한 번에 합성하기 위해 IIFE 로 감싼다.
     const body = applyAdditionalParameters(
-        applyParameters(
-            {
+        ((): Record<string, any> => {
+            const baseBody = applyParameters({
                 model: arg.modelInfo.internalID ?? aiModel,
                 input: items,
                 max_output_tokens: maxTokens,
-                tools: db.modelTools.includes('search') ? ['web_search_preview'] : [],
-                // ollama-cloud 는 store 미지원이라 처음부터 제외
-                ...(aiModel === 'ollama-cloud' ? {} : { store: false })
-            },
-            ['temperature', 'top_p'],
-            {},
-            arg.mode,
-            { modelId: arg.modelInfo.id }
-        ),
+                tools: [] as any[],
+                store: false
+            }, ['temperature', 'top_p'], {}, arg.mode, {
+                modelId: arg.modelInfo.id
+            })
+
+            if(aiModel === 'ollama-cloud'){
+                delete (baseBody as any).store
+            }
+
+            if(db.modelTools.includes('search')){
+                (baseBody as any).tools.push('web_search_preview')
+            }
+
+            return baseBody
+        })(),
         headers,
+        // getAdditionalParameters 는 reverse_proxy / xcustom::: 가 아니면 [] 반환.
+        // 항상 호출해도 안전. (이전에 {} 를 넘겨서 body 가 사라지던 버그 수정)
         getAdditionalParameters(aiModel)
     )
 
