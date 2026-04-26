@@ -601,8 +601,6 @@ export async function requestClaude(arg:RequestDataArgumentExtended):Promise<req
         body = applyAdditionalParameters(body, headers, additionalParams)
     }
 
-    let betas:string[] = []
-
     if(body.max_tokens > 8192){
         betas.push('output-128k-2025-02-19')
     }
