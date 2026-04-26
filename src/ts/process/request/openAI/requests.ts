@@ -953,7 +953,6 @@ export async function requestOpenAILegacyInstruct(arg:RequestDataArgumentExtende
     
 }
 
-
 export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):Promise<requestDataResponse>{
 
     const formated = arg.formated
@@ -1024,7 +1023,7 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
         (items[items.length-1] as ResponseOutputItem).status = 'incomplete'
     }
 
-    // ---- URL 결정: 원본 로직 그대로 (재할당 없는 형태로만 정리) ----
+    // ---- URL 결정 ----
     let requestURL = arg.customURL ?? "https://api.openai.com/v1/responses"
     if(arg.modelInfo?.endpoint){
         requestURL = arg.modelInfo.endpoint
@@ -1081,45 +1080,41 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
         }
     }
 
-    const headers = {
+    // ---- Headers ----
+    const headers: Record<string,string> = {
         "Authorization": "Bearer " + (arg.key ?? db.openAIKey),
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        ...(risuIdentify ? { "X-Proxy-Risu": "RisuAI" } : {})
     }
 
-    if(risuIdentify){
-        headers["X-Proxy-Risu"] = 'RisuAI'
-    }
+    // ---- Body 를 한 번에 (IIFE 로) 만들기 ----
+    // 1) baseBody : ollama-cloud 면 store 제외, search 툴 사용 시 web_search_preview 추가
+    // 2) applyParameters : 하드코딩된 ['temperature','top_p'] 대신 arg.modelInfo.parameters 전체 사용
+    //    -> top_p, temperature, presence/frequency penalty 등 모델별 파라미터가 전부 정상 적용됨
+    // 3) applyAdditionalParameters : reverse_proxy / xcustom::: 일 때 사용자 정의 추가 파라미터 적용
+    //    -> 이게 누락돼서 "추가 파라미터가 안 들어가는" 문제가 발생했었음
+    const body = (() => {
+        const baseBody: Record<string, any> = {
+            model: arg.modelInfo.internalID ?? aiModel,
+            input: items,
+            max_output_tokens: maxTokens,
+            tools: db.modelTools.includes('search') ? ['web_search_preview'] : [],
+            ...(aiModel === 'ollama-cloud' ? {} : { store: false })
+        }
 
-    // ---- body: 원본 빌드 로직 그대로 두고, applyAdditionalParameters 만 마지막에 합성 ----
-    // applyParameters → (조건부) tools/store 정리 → applyAdditionalParameters 를
-    // const 한 번에 합성하기 위해 IIFE 로 감싼다.
-    const body = applyAdditionalParameters(
-        ((): Record<string, any> => {
-            const baseBody = applyParameters({
-                model: arg.modelInfo.internalID ?? aiModel,
-                input: items,
-                max_output_tokens: maxTokens,
-                tools: [] as any[],
-                store: false
-            }, ['temperature', 'top_p'], {}, arg.mode, {
-                modelId: arg.modelInfo.id
-            })
+        const withParams = applyParameters(
+            baseBody,
+            arg.modelInfo.parameters,
+            {},
+            arg.mode,
+            { modelId: arg.modelInfo.id }
+        )
 
-            if(aiModel === 'ollama-cloud'){
-                delete (baseBody as any).store
-            }
-
-            if(db.modelTools.includes('search')){
-                (baseBody as any).tools.push('web_search_preview')
-            }
-
-            return baseBody
-        })(),
-        headers,
-        // getAdditionalParameters 는 reverse_proxy / xcustom::: 가 아니면 [] 반환.
-        // 항상 호출해도 안전. (이전에 {} 를 넘겨서 body 가 사라지던 버그 수정)
-        getAdditionalParameters(aiModel)
-    )
+        const useAdditional = (aiModel === 'reverse_proxy' || aiModel.startsWith('xcustom:::'))
+        return useAdditional
+            ? applyAdditionalParameters(withParams, headers, getAdditionalParameters(aiModel))
+            : withParams
+    })()
 
     if(arg.previewBody){
         return {
@@ -1164,6 +1159,7 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
         result: result
     }
 }
+
 
 
 function getTranStream(arg:RequestDataArgumentExtended):TransformStream<Uint8Array, StreamResponseChunk> {
