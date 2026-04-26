@@ -951,6 +951,7 @@ export async function requestOpenAILegacyInstruct(arg:RequestDataArgumentExtende
         result: text.replace(/##\n/g, '')
     }
     
+}
 
 export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):Promise<requestDataResponse>{
 
@@ -1022,7 +1023,7 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
         (items[items.length-1] as ResponseOutputItem).status = 'incomplete'
     }
 
-    // ---- URL 결정 (risu:: prefix / autofill 포함) ----
+    // ---- URL 한 번에 결정 (재할당 없음) ----
     const autofillResponsesURL = (input:string):string => {
         try{
             const url = new URL(input)
@@ -1075,14 +1076,14 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
         ? autofillResponsesURL(cleanedURL)
         : cleanedURL
 
-    // ---- headers (한 번에 const 로 만들기) ----
+    // ---- headers 한 번에 (재할당 없음) ----
     const headers: Record<string, string> = {
         "Authorization": "Bearer " + (arg.key ?? db.openAIKey),
         "Content-Type": "application/json",
         ...(risuIdentify ? { "X-Proxy-Risu": "RisuAI" } : {})
     }
 
-    // ---- body (한 번에 const 로 빌드) ----
+    // ---- body 한 번에 (재할당 없음, applyAdditionalParameters 까지 합성) ----
     const usesAdditional = (aiModel === 'reverse_proxy' || aiModel.startsWith('xcustom:::'))
 
     const body = applyAdditionalParameters(
@@ -1092,7 +1093,7 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
                 input: items,
                 max_output_tokens: maxTokens,
                 tools: db.modelTools.includes('search') ? ['web_search_preview'] : [],
-                // ollama-cloud 는 store 필드를 지원하지 않으므로 처음부터 빼고 빌드
+                // ollama-cloud 는 store 미지원이라 처음부터 제외
                 ...(aiModel === 'ollama-cloud' ? {} : { store: false })
             },
             ['temperature', 'top_p'],
