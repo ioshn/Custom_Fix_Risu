@@ -953,6 +953,7 @@ export async function requestOpenAILegacyInstruct(arg:RequestDataArgumentExtende
     
 }
 
+
 export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):Promise<requestDataResponse>{
 
     const formated = arg.formated
@@ -1083,9 +1084,9 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
         ...(risuIdentify ? { "X-Proxy-Risu": "RisuAI" } : {})
     }
 
-    // ---- body 한 번에 (재할당 없음, applyAdditionalParameters 까지 합성) ----
-    const usesAdditional = (aiModel === 'reverse_proxy' || aiModel.startsWith('xcustom:::'))
-
+    // ---- body 한 번에 (재할당 없음) ----
+    // getAdditionalParameters 는 reverse_proxy / xcustom::: 가 아니면 [] 를 돌려주므로
+    // 분기 없이 항상 호출해도 안전함. (이전에 {} 를 넘겨서 body 가 사라지던 버그를 수정)
     const body = applyAdditionalParameters(
         applyParameters(
             {
@@ -1102,7 +1103,7 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
             { modelId: arg.modelInfo.id }
         ),
         headers,
-        usesAdditional ? getAdditionalParameters(aiModel) : {}
+        getAdditionalParameters(aiModel)
     )
 
     if(arg.previewBody){
@@ -1148,6 +1149,7 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
         result: result
     }
 }
+
 
 function getTranStream(arg:RequestDataArgumentExtended):TransformStream<Uint8Array, StreamResponseChunk> {
     let dataUint:Uint8Array|Buffer = new Uint8Array([])
