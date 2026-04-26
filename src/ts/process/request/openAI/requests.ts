@@ -1023,7 +1023,7 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
         (items[items.length-1] as ResponseOutputItem).status = 'incomplete'
     }
     
-    let body = applyParameters({
+    const body = applyParameters({
         model: arg.modelInfo.internalID ?? aiModel,
         input: items,
         max_output_tokens: maxTokens,
