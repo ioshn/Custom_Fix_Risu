@@ -951,7 +951,6 @@ export async function requestOpenAILegacyInstruct(arg:RequestDataArgumentExtende
         result: text.replace(/##\n/g, '')
     }
     
-}
 
 export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):Promise<requestDataResponse>{
 
@@ -1022,35 +1021,11 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
     if(items[items.length-1].role === 'assistant'){
         (items[items.length-1] as ResponseOutputItem).status = 'incomplete'
     }
-    
-    const body = applyParameters({
-        model: arg.modelInfo.internalID ?? aiModel,
-        input: items,
-        max_output_tokens: maxTokens,
-        tools: [],
-        store: false
-    }, arg.modelInfo.parameters, {}, arg.mode, {
-        modelId: arg.modelInfo.id
-    })
 
-    if(aiModel === 'ollama-cloud'){
-        delete body.store
-    }
-
-    let requestURL = arg.customURL ?? "https://api.openai.com/v1/responses"
-    if(arg.modelInfo?.endpoint){
-        requestURL = arg.modelInfo.endpoint
-    }
-
-    let risuIdentify = false
-    if(requestURL.startsWith("risu::")){
-        risuIdentify = true
-        requestURL = requestURL.replace("risu::", '')
-    }
-
-    if(aiModel === 'reverse_proxy' && db.autofillRequestUrl){
+    // ---- URL 결정 (risu:: prefix / autofill 포함) ----
+    const autofillResponsesURL = (input:string):string => {
         try{
-            const url = new URL(requestURL)
+            const url = new URL(input)
             const pathSegments = url.pathname.split('/').filter(Boolean)
             const lastSegment = pathSegments[pathSegments.length - 1] ?? ''
 
@@ -1067,10 +1042,10 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
                 url.pathname = url.pathname.replace(/\/?$/, '/v1/responses')
             }
 
-            requestURL = url.toString()
+            return url.toString()
         }
         catch{
-            const [baseURL, query] = requestURL.split('?', 2)
+            const [baseURL, query] = input.split('?', 2)
             let nextURL = baseURL
             const pathSegments = nextURL.split('/').filter(Boolean)
             const lastSegment = pathSegments[pathSegments.length - 1] ?? ''
@@ -1089,22 +1064,45 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
                 nextURL += nextURL.endsWith('/') ? 'v1/responses' : '/v1/responses'
             }
 
-            requestURL = query ? `${nextURL}?${query}` : nextURL
+            return query ? `${nextURL}?${query}` : nextURL
         }
     }
 
-    const headers = {
+    const rawURL = arg.modelInfo?.endpoint ?? arg.customURL ?? "https://api.openai.com/v1/responses"
+    const risuIdentify = rawURL.startsWith("risu::")
+    const cleanedURL = risuIdentify ? rawURL.replace("risu::", '') : rawURL
+    const requestURL = (aiModel === 'reverse_proxy' && db.autofillRequestUrl)
+        ? autofillResponsesURL(cleanedURL)
+        : cleanedURL
+
+    // ---- headers (한 번에 const 로 만들기) ----
+    const headers: Record<string, string> = {
         "Authorization": "Bearer " + (arg.key ?? db.openAIKey),
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        ...(risuIdentify ? { "X-Proxy-Risu": "RisuAI" } : {})
     }
 
-    if(risuIdentify){
-        headers["X-Proxy-Risu"] = 'RisuAI'
-    }
+    // ---- body (한 번에 const 로 빌드) ----
+    const usesAdditional = (aiModel === 'reverse_proxy' || aiModel.startsWith('xcustom:::'))
 
-    if(aiModel === 'reverse_proxy' || aiModel.startsWith('xcustom:::')){
-        body = applyAdditionalParameters(body, headers, getAdditionalParameters(aiModel))
-    }
+    const body = applyAdditionalParameters(
+        applyParameters(
+            {
+                model: arg.modelInfo.internalID ?? aiModel,
+                input: items,
+                max_output_tokens: maxTokens,
+                tools: db.modelTools.includes('search') ? ['web_search_preview'] : [],
+                // ollama-cloud 는 store 필드를 지원하지 않으므로 처음부터 빼고 빌드
+                ...(aiModel === 'ollama-cloud' ? {} : { store: false })
+            },
+            ['temperature', 'top_p'],
+            {},
+            arg.mode,
+            { modelId: arg.modelInfo.id }
+        ),
+        headers,
+        usesAdditional ? getAdditionalParameters(aiModel) : {}
+    )
 
     if(arg.previewBody){
         return {
@@ -1115,10 +1113,6 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
                 headers: headers
             })
         }
-    }
-
-    if(db.modelTools.includes('search')){
-        body.tools.push('web_search_preview')
     }
 
     const localNetworkOptions = getLocalNetworkRequestOptions(requestURL, db, false)
@@ -1140,7 +1134,7 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
         }
     }
 
-    let result: string = (response.data.output?.find((m:ResponseOutputItem) => m.type === 'message') as ResponseOutputItem)?.content?.find(m => m.type === 'output_text')?.text
+    const result: string = (response.data.output?.find((m:ResponseOutputItem) => m.type === 'message') as ResponseOutputItem)?.content?.find(m => m.type === 'output_text')?.text
 
     if(!result){
         return {
