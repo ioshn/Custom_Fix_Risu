@@ -1023,13 +1023,13 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
         (items[items.length-1] as ResponseOutputItem).status = 'incomplete'
     }
     
-    const body = applyParameters({
+    let body = applyParameters({
         model: arg.modelInfo.internalID ?? aiModel,
         input: items,
         max_output_tokens: maxTokens,
         tools: [],
         store: false
-    }, ['temperature', 'top_p'], {}, arg.mode, {
+    }, arg.modelInfo.parameters, {}, arg.mode, {
         modelId: arg.modelInfo.id
     })
 
@@ -1100,6 +1100,10 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
 
     if(risuIdentify){
         headers["X-Proxy-Risu"] = 'RisuAI'
+    }
+
+    if(aiModel === 'reverse_proxy' || aiModel.startsWith('xcustom:::')){
+        body = applyAdditionalParameters(body, headers, getAdditionalParameters(aiModel))
     }
 
     if(arg.previewBody){
