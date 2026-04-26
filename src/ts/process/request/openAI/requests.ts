@@ -1022,8 +1022,21 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
     if(items[items.length-1].role === 'assistant'){
         (items[items.length-1] as ResponseOutputItem).status = 'incomplete'
     }
+    
+    const body = applyParameters({
+        model: arg.modelInfo.internalID ?? aiModel,
+        input: items,
+        max_output_tokens: maxTokens,
+        tools: [],
+        store: false
+    }, ['temperature', 'top_p'], {}, arg.mode, {
+        modelId: arg.modelInfo.id
+    })
 
-    // ---- URL 결정 ----
+    if(aiModel === 'ollama-cloud'){
+        delete body.store
+    }
+
     let requestURL = arg.customURL ?? "https://api.openai.com/v1/responses"
     if(arg.modelInfo?.endpoint){
         requestURL = arg.modelInfo.endpoint
@@ -1080,41 +1093,14 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
         }
     }
 
-    // ---- Headers ----
-    const headers: Record<string,string> = {
+    const headers = {
         "Authorization": "Bearer " + (arg.key ?? db.openAIKey),
-        "Content-Type": "application/json",
-        ...(risuIdentify ? { "X-Proxy-Risu": "RisuAI" } : {})
+        "Content-Type": "application/json"
     }
 
-    // ---- Body 를 한 번에 (IIFE 로) 만들기 ----
-    // 1) baseBody : ollama-cloud 면 store 제외, search 툴 사용 시 web_search_preview 추가
-    // 2) applyParameters : 하드코딩된 ['temperature','top_p'] 대신 arg.modelInfo.parameters 전체 사용
-    //    -> top_p, temperature, presence/frequency penalty 등 모델별 파라미터가 전부 정상 적용됨
-    // 3) applyAdditionalParameters : reverse_proxy / xcustom::: 일 때 사용자 정의 추가 파라미터 적용
-    //    -> 이게 누락돼서 "추가 파라미터가 안 들어가는" 문제가 발생했었음
-    const body = (() => {
-        const baseBody: Record<string, any> = {
-            model: arg.modelInfo.internalID ?? aiModel,
-            input: items,
-            max_output_tokens: maxTokens,
-            tools: db.modelTools.includes('search') ? ['web_search_preview'] : [],
-            ...(aiModel === 'ollama-cloud' ? {} : { store: false })
-        }
-
-        const withParams = applyParameters(
-            baseBody,
-            arg.modelInfo.parameters,
-            {},
-            arg.mode,
-            { modelId: arg.modelInfo.id }
-        )
-
-        const useAdditional = (aiModel === 'reverse_proxy' || aiModel.startsWith('xcustom:::'))
-        return useAdditional
-            ? applyAdditionalParameters(withParams, headers, getAdditionalParameters(aiModel))
-            : withParams
-    })()
+    if(risuIdentify){
+        headers["X-Proxy-Risu"] = 'RisuAI'
+    }
 
     if(arg.previewBody){
         return {
@@ -1125,6 +1111,10 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
                 headers: headers
             })
         }
+    }
+
+    if(db.modelTools.includes('search')){
+        body.tools.push('web_search_preview')
     }
 
     const localNetworkOptions = getLocalNetworkRequestOptions(requestURL, db, false)
@@ -1146,7 +1136,7 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
         }
     }
 
-    const result: string = (response.data.output?.find((m:ResponseOutputItem) => m.type === 'message') as ResponseOutputItem)?.content?.find(m => m.type === 'output_text')?.text
+    let result: string = (response.data.output?.find((m:ResponseOutputItem) => m.type === 'message') as ResponseOutputItem)?.content?.find(m => m.type === 'output_text')?.text
 
     if(!result){
         return {
@@ -1159,8 +1149,6 @@ export async function requestOpenAIResponseAPI(arg:RequestDataArgumentExtended):
         result: result
     }
 }
-
-
 
 function getTranStream(arg:RequestDataArgumentExtended):TransformStream<Uint8Array, StreamResponseChunk> {
     let dataUint:Uint8Array|Buffer = new Uint8Array([])
